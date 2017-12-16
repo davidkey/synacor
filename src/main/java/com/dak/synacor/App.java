@@ -1,21 +1,40 @@
 package com.dak.synacor;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URISyntaxException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collections;
+import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Scanner;
 import java.util.Set;
+
+import org.apache.commons.io.IOUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import ch.qos.logback.classic.Level;
 
 public class App {
 
-	private static final int WATCHDOG_MAX_CYCLES = 100_000;
+	private static final int WATCHDOG_MAX_CYCLES = 10_000_000;
+
+	private static final Logger logger = LoggerFactory.getLogger(App.class);
+	
+	private final Deque<Character> charsDeque;// = new ArrayDeque<>();
+	private final Scanner sc;// = new Scanner(System.in);
+	
+	static {
+		ch.qos.logback.classic.Logger root = (ch.qos.logback.classic.Logger)LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
+		root.setLevel(Level.WARN);
+	}
 
 	public App() {
-		// TODO Auto-generated constructor stub
+		charsDeque = new ArrayDeque<>();
+		sc = new Scanner(System.in);
 	}
 
 	/*private static final int[] memory = new int[32767];
@@ -23,7 +42,7 @@ public class App {
 	private static final Stack stack = new Stack();*/
 
 	private static final Set<Integer> OP_CODES_ENCOUNTERED = new HashSet<>();
-	
+
 	private static final String[] descriptions = {
 			"halt",
 			"set",
@@ -77,25 +96,39 @@ public class App {
 	private static int cyclesCounter = 0;
 
 	public static void main(String[] args) {
-		System.out.println("Start");
+		logger.debug("Start");
 		final long startTime = System.currentTimeMillis();
 
 		try{
-			new App().run();
+			final App app = new App();
+			app.run();
 		} catch (Exception e){
-			e.printStackTrace();
+			logger.error(e.getMessage(), e);
 		}
 
-		System.out.println("End - cycles: " + cyclesCounter + " - time elapsed (ms): " + (System.currentTimeMillis() - startTime));
+		logger.debug("End - cycles: " + cyclesCounter + " - time elapsed (ms): " + (System.currentTimeMillis() - startTime));
 	}
 
 	public void run() throws Exception{
 		final List<Integer> program = reverseEndianess(getProgram());
 
+		/*
 		Arrays.stream(decompile(program).split(System.lineSeparator()))
-		.limit(500)
+		.limit(500L)
 		.forEach(System.out::println);
-		 
+		*/
+
+		// fill with noops until our address space is 2^15 (32768)
+		if(program.size() < 32768) {
+			program.addAll(Collections.nCopies(32768 - program.size(), 21));
+		}
+
+		if(program.size() != 32768) {
+			throw new RuntimeException("program invalid size! should be 32768 but is " + program.size());
+		}
+
+		//Files.write(Paths.get("d:/synacore_decompile.txt"), decompile(program).getBytes());
+
 		//System.out.println(decompile(program));
 
 		int index = 0;
@@ -109,9 +142,10 @@ public class App {
 			Thread.sleep(100);
 		}
 
-		System.err.println("Op codes encountered: " + OP_CODES_ENCOUNTERED);
+		logger.debug("Op codes encountered: {}", OP_CODES_ENCOUNTERED);
 	}
 
+	@SuppressWarnings("unused")
 	private String decompile(final List<Integer> program){
 		final StringBuilder results = new StringBuilder();
 
@@ -137,11 +171,11 @@ public class App {
 					for(int j = 0; j < numArguments[opCode]; j++){
 						final int arg = program.get(i + j + 1);
 						results.append(" ");//.append(program.get(i + j + 1));
-						
+
 						if(isRegisterReference(arg)){
 							results.append("@");
 						}
-						
+
 						results.append(arg);
 					}
 				}
@@ -164,14 +198,14 @@ public class App {
 
 		if(isOpCode(op)){
 			OP_CODES_ENCOUNTERED.add(op);
-			
+
 			if(op != 19){
-				System.out.println("\n[current instruction pointer: " + startingIndex + "] -- " + descriptions[op] + " -- " + VirtualMachine.getAllRegisters() + "\n");
+				logger.debug("[current instruction pointer: {}] -- {} --\t {}", startingIndex, descriptions[op], VirtualMachine.getAllRegisters());
 			}
 		}
 
 		cyclesCounter++;
-		
+
 		switch(op){
 		case 0: { // halt: 0
 			return -1;
@@ -238,19 +272,25 @@ public class App {
 			return getIndexOfNextOpCode(program, startingIndex + numArguments[op] + 1);
 		}
 		case 15: { // rmem: 15 a b [read memory at address <b> and write it to <a>]			
-			System.out.println("rmem @ address " + getValue(program.get(startingIndex + 2)) + " = " + program.get(getValue(program.get(startingIndex + 2))));
+			logger.debug("rmem @ address {} = {}", getValue(program.get(startingIndex + 2)), program.get(getValue(program.get(startingIndex + 2))));
 			VirtualMachine.setRegister(program.get(startingIndex + 1), program.get(getValue(program.get(startingIndex + 2))));
-			
+
 			return getIndexOfNextOpCode(program, startingIndex + numArguments[op] + 1);
 		}
-		case 16: { // wmem: 16 a b [read memory at address <b> and write it to <a>]
-			
-			System.out.println("wmem to " + getValue(program.get(startingIndex + 1))  + " from address " + getValue(program.get(startingIndex + 2)) + " = " + program.get(getValue(program.get(startingIndex + 2))));
-			System.out.println("value before: " + program.get(getValue(program.get(startingIndex + 1))));
-			
-			program.set(getValue(program.get(startingIndex + 1)), program.get(getValue(program.get(startingIndex + 2))));
-			
-			System.out.println("value after: " + program.get(getValue(program.get(startingIndex + 1))));
+		case 16: { // wmem: 16 a b [write the value from <b> into memory at address <a>]
+
+			logger.debug("wmem to {} from address {} = {} (prior value = {})", getValue(program.get(startingIndex + 1)), getValue(program.get(startingIndex + 2)), program.get(getValue(program.get(startingIndex + 2))), program.get(getValue(program.get(startingIndex + 1))));
+
+			//program.set(getValue(program.get(startingIndex + 1)), program.get(getValue(program.get(startingIndex + 2))));
+			int target = getValue(program.get(startingIndex + 1));
+
+			if(isRegisterReference(target)) {
+				VirtualMachine.setRegister(target, getValue(program.get(startingIndex + 2)));
+			} else {
+				program.set(getValue(program.get(startingIndex + 1)), getValue(program.get(startingIndex + 2)));
+			}
+
+			logger.debug("value after: {}", program.get(getValue(program.get(startingIndex + 1))));
 
 			return getIndexOfNextOpCode(program, startingIndex + numArguments[op] + 1);
 		}
@@ -271,20 +311,44 @@ public class App {
 			return getIndexOfNextOpCode(program, startingIndex + numArguments[op] + 1);
 		}
 		case 20: { // in: 20 a
-			throw new RuntimeException("not yet implemented");
+			int result = (int)getNextChar();
+
+			int target = program.get(startingIndex + 1);
+
+			if(isRegisterReference(target)) {
+				VirtualMachine.setRegister(target, result);
+			} else {
+				program.set(getValue(program.get(startingIndex + 1)), result); // this this right?
+			}
+
+			return getIndexOfNextOpCode(program, startingIndex + numArguments[op] + 1);
 		}
 		case 21: { // noop: 21
 			return getIndexOfNextOpCode(program, startingIndex + numArguments[op] + 1);
 		}
 		default: { // invalid? just skip...
 			if(isOpCode(program.get(startingIndex))){
-				System.out.println("cycle: " + cyclesCounter + " / idx: " + startingIndex + " encounted unknown opcode: " + program.get(startingIndex) + " - here's the next few bits: " + program.subList(startingIndex, startingIndex+4));
+				logger.warn("cycle: {} / idx: {} enountered unknown opcode: {} - here's the next few bits: {}", cyclesCounter, startingIndex, program.get(startingIndex), program.subList(startingIndex, startingIndex+4));
 			}
 			return getIndexOfNextOpCode(program, startingIndex + numArguments[op] + 1);
 		}
 		}
 
 		//return getIndexOfNextOpCode(program, startingIndex + 1); 
+	}
+
+	private char getNextChar() {
+		if(charsDeque.isEmpty()) {
+			final char[] charArray = sc.nextLine().toCharArray();
+
+			for(int i = 0; i < charArray.length; i++) {
+				charsDeque.push(charArray[i]);
+			}
+
+			charsDeque.push('\n');
+		}
+
+		return charsDeque.removeLast();
 	}
 
 	private int getValue(int x){
@@ -316,7 +380,10 @@ public class App {
 	}
 
 	private byte[] getProgram() throws IOException, URISyntaxException{
-		return Files.readAllBytes(Paths.get(this.getClass().getResource("/challenge.bin").toURI()));
+		try(InputStream in = getClass().getResourceAsStream("/challenge.bin")){
+			byte[] data = IOUtils.toByteArray(in);
+			return data;
+		}
 	}
 
 	private List<Integer> reverseEndianess(final byte[] input){
