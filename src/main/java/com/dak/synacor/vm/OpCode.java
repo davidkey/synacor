@@ -1,7 +1,7 @@
-package com.dak.synacor;
+package com.dak.synacor.vm;
 
 public enum OpCode {
-	HALT(0, 9),
+	HALT(0, 0),
 	SET(1, 2),
 	PUSH(2, 1),
 	POP(3, 1),
@@ -38,5 +38,17 @@ public enum OpCode {
 	
 	public int getNumOfArguments(){
 		return this.numOfArguments;
+	}
+	
+	public static Boolean isOpCode(final Integer opCodeInt) {
+		return (opCodeInt > 0 && opCodeInt < OpCode.values().length);
+	}
+	
+	public static OpCode fromInt(final Integer opCodeInt) {
+		if(!isOpCode(opCodeInt)) {
+			throw new RuntimeException("invalid op code " + opCodeInt);
+		}
+		
+		return OpCode.values()[opCodeInt];
 	}
 }
