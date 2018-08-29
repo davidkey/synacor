@@ -41,7 +41,7 @@ public enum OpCode {
 	}
 	
 	public static Boolean isOpCode(final Integer opCodeInt) {
-		return (opCodeInt > 0 && opCodeInt < OpCode.values().length);
+		return (opCodeInt >= 0 && opCodeInt < OpCode.values().length);
 	}
 	
 	public static OpCode fromInt(final Integer opCodeInt) {
